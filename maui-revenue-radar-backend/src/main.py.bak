@@ -1,0 +1,231 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timedelta
+from typing import Optional
+from enum import Enum
+
+app = FastAPI(title="Maui Revenue Radar - Tourism Demand Forecasting API")
+
+# CORS configuration for Render deployment
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class DemandIndex(Enum):
+    EXCEPTIONAL = (120, float("inf"))
+    VERY_HIGH = range(110, 120)
+    HIGH = range(103, 110)
+    NORMAL = range(97, 103)
+    BELOW_NORMAL = range(90, 97)
+    WEAK = "below_90"
+
+# Mock data ingestion (in production, connect to DB)
+def simulate_dbedb_import():
+    """Mock ingestion from DBEDT Daily Passenger Counts"""
+    return {
+        "last_count": 8500,
+        "previous_count": 7200,
+        "delta_percent": 17.9
+    }
+
+def simulate_hta_airline_forecast():
+    """Mock forecast from HTA Air Seat Outlook (7 days out)"""
+    return {
+        "forecast_date": datetime.now() + timedelta(days=7),
+        "scheduled_seats": 25000,
+        "flight_count": 45,
+        "origin_region": "North America"
+    }
+
+# Opportunity scoring logic
+def calculate_demand_index(
+    forecast_arrivals: float,
+    expected_seasonal_arrivals: float
+) -> DemandIndex:
+    """Calculate demand index according to spec"""
+    if expected_seasonal_arrivals == 0:
+        return DemandIndex.NORMAL
+    
+    index = (forecast_arrivals / expected_seasonal_arrivals) * 100
+    
+    if index >= 120:
+        return DemandIndex.EXCEPTIONAL
+    elif index >= 110:
+        return DemandIndex.VERY_HIGH
+    elif index >= 103:
+        return DemandIndex.HIGH
+    elif index >= 97:
+        return DemandIndex.NORMAL
+    elif index >= 90:
+        return DemandIndex.BELOW_NORMAL
+    else:
+        return DemandIndex.WEAK
+
+def get_classification_label(index: float) -> str:
+    """Return human-readable classification"""
+    if index >= 120:
+        return "Exceptional"
+    elif index >= 110:
+        return "Very High"
+    elif index >= 103:
+        return "High"
+    elif index >= 97:
+        return "Normal"
+    elif index >= 90:
+        return "Below Normal"
+    else:
+        return "Weak"
+
+# API Endpoints
+@app.get("/api/v1/health")
+async def health_check():
+    """Health check endpoint for Render monitoring"""
+    return {"status": "healthy", "service": "maui-revenue-radar"}
+
+@app.get("/api/v1/dashboard")
+async def get_dashboard_metrics(
+    business_name: Optional[str] = None
+):
+    """Business Intelligence Dashboard - core MVP feature"""
+    
+    # Simulate current demand
+    dbedb_data = simulate_dbedb_import()
+    hta_forecast = simulate_hta_airout()
+    
+    demand_index = calculate_demand_index(
+        forecast_arrivals=hta_forecast["scheduled_seats"],
+        expected_seasonal_arrivals=7200  # Historical baseline
+    )
+    
+    return {
+        "business": business_name or "Unknown Business",
+        "demand_status": get_classification_label(demand_index.value) if isinstance(demand_index.value, (int, float)) else "Normal",
+        "next_opportunity_days": [
+            {"date": f"2024-{i:02d}-15", "classification": "High"},
+            {"date": f"2024-{i:02d}-20", "classification": "Exceptional"},
+            {"date": f"2024-{i:02d}-28", "classification": "Very High"}
+        ] for i in range(1, 4)
+    }
+
+@app.get("/api/v1/forecasts")
+async def get_demand_forecast(
+    horizon_days: int = 7,
+    business_name: Optional[str] = None
+):
+    """Demand forecasting with configurable horizon (7-90 days)"""
+    
+    return {
+        "forecast_horizon": f"{horizon_days} days",
+        "business": business_name or "Tour Operator",
+        "forecasts": [
+            {"day_offset": i, "predicted_arrivals": 8500 + (i * 200), "confidence_range": {
+                "low": 6000 + (i * 100), 
+                "high": 11000 + (i * 300)
+            }}
+            for i in range(1, horizon_days + 1)
+        ]
+    }
+
+@app.get("/api/v1/calendar")
+async def get_opportunity_calendar(
+    days: int = 90
+):
+    """Opportunity calendar - color-coded forecast visualization"""
+    
+    color_mapping = {
+        120+ : "#4CAF50",      # Green: Exceptional
+        "110-119": "#8BC34A",  # Light Green
+        "103-109": "#FFC107",  # Yellow
+        "97-102": "#BBBDBB",   # Neutral Gray
+        "90-96": "#FFEB3B",    # Below Normal
+        "below_90": "#EF5350"  # Red: Weak
+    }
+    
+    return {
+        "calendar_days": days,
+        "forecast_dates": [
+            {
+                "date": f"2024-12-{i:02}", 
+                "demand_index": round(100 + (i * 0.8), 1),
+                "classification": get_classification_label(round(100 + (i * 0.8))) if round(100 + (i * 0.8)) >= 97 else "High",
+                "color": "green",
+                "expected_bookings": round(45 + (i * 2), 1)
+            }
+            for i in range(1, days + 1)
+        ]
+    }
+
+@app.post("/api/v1/revenue/simulate")
+async def simulate_revenue_scenario(data: dict):
+    """Business Revenue Simulator - configurable scenarios"""
+    
+    scenario = data.get("scenario", "baseline")
+    adjustments = data.get("adjustments", {})
+    
+    base_booking_value = 150
+    base_seats = 20
+    base_departures = 3
+    
+    return {
+        "simulated_scenario": scenario,
+        "metrics": [
+            {"name": "Expected Bookings", "value": round(45 * base_departures)},
+            {"name": "Gross Revenue", "value": f"${round(45 * base_departures) * base_booking_value,0}"},
+            {"name": "Operating Costs", "value": f"${round(45 * base_departures) * adjustments.get('cost_per_day', 2000)}"},
+            {"name": "Contribution Margin", "value": f"${round((45 * base_departures) * base_booking_value - adjustments.get('cost_per_day', 2000))}"}
+        ],
+        "forecast_confidence": {
+            "lower_bound": round(0.8 * (45 * base_departures)),
+            "upper_bound": round(1.2 * (45 * base_departures))
+        }
+    }
+
+@app.get("/api/v1/alerts")
+async def get_alerts_configured():
+    """Retrieved alerts for business"""
+    return {
+        "active_alerts": [
+            {"type": "demand_increase", "message": "Maui demand forecast increased 12%", "severity": "high"},
+            {"type": "opportunity_approaching", "message": "High-demand period approaching in 21 days", "severity": "medium"}
+        ],
+        "notification_preferences": ["email"]
+    }
+
+@app.get("/api/v1/alerts/preferences")
+async def get_alert_preferences(
+    alert_types: list[str] = [],
+    frequency_days: int = 7
+):
+    """Configure alert preferences"""
+    return {
+        "configured_alerts": alert_types,
+        "frequency_days": frequency_days,
+        "channels": ["email"]
+    }
+
+@app.get("/api/v1/business/profile")
+async def get_business_profile(data: dict):
+    """Retrieve business profile configuration"""
+    return {
+        **data,
+        "status": "active",
+        "last_updated": datetime.now().isoformat()
+    }
+
+@app.post("/api/v1/bookings/import")
+async def import_bookings(file_data: str):
+    """Upload booking history (CSV/Excel)"""
+    return {
+        "status": "success",
+        "message": "Booking data imported successfully",
+        "record_count": 0  # Would be populated from file
+    }
+
+# Health check for Docker/Render monitoring
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
